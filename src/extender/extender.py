@@ -69,7 +69,7 @@ class TraceMap:
         self.roots = self.parse_root()
         self.relabel_tensor()
         self.rebuild_map()
-        self.tensor_node = {}
+        self.tensor_node: Dict[int, TensorNode] = {}
 
     def relabel_tensor(self):
         self.tensor_count = 0
@@ -111,7 +111,16 @@ class TraceMap:
             self.node_outputs[id] = outputs
 
     def rebuild_map(self):
-        pass
+        for id, node in self.node_map.items():
+            if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
+                self.node_map[self.node_map[node.parent].name].extra_node.append(id)
+                continue
+            self.node_inputs[id].sort()
+            self.node_outputs[id].sort()
+            for x in self.node_inputs[id]:
+                self.tensor_node[x].add_son(id)
+            for x in self.node_outputs[id]:
+                self.tensor_node[x].set_parent(id)
 
     def add_GPU_samegroup(self):
         pass
