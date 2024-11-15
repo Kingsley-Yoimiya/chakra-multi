@@ -2,6 +2,7 @@ import json
 import logging
 from typing import IO, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
+import queue
 
 from ...schema.protobuf.et_def_pb2 import (
     ALL_GATHER,
@@ -81,6 +82,7 @@ class TraceMap:
             outputs = []
             node.extra_node = []
             if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
+                self.ignore = True
                 continue
             for input_value, input_shape, input_type in zip(
                 node.inputs["values"], node.inputs["shapes"], node.input["types"]
@@ -112,7 +114,7 @@ class TraceMap:
 
     def rebuild_map(self):
         for id, node in self.node_map.items():
-            if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
+            if self.ignore:
                 self.node_map[self.node_map[node.parent].name].extra_node.append(id)
                 continue
             self.node_inputs[id].sort()
@@ -122,8 +124,31 @@ class TraceMap:
             for x in self.node_outputs[id]:
                 self.tensor_node[x].set_parent(id)
 
-    def add_GPU_samegroup(self):
+    def extend_front(self, front, back, tensor_copy_map, x):
         pass
+
+    def extend_back(self, front, back, tensor_copy_map, x):
+        pass
+
+    def add_GPU_samegroup(self):
+        front = queue.PriorityQueue()
+        back = queue.PriorityQueue()
+        tensor_copy_map = defaultdict(int)
+        for id, node in self.node_map.item():
+            if node.ignore:
+                continue
+            if "alltoall" in node.name:
+                front.push((id, 0))  # 0 present operation
+                back.push((id, 0))
+        while not front.empty() and not back.empty():
+            if not front.empty():
+                x = front.top()
+                front.pop()
+                self.extend_front(front, back, tensor_copy_map, x)
+            else:
+                x = back.top()
+                back.pop()
+                self.extend_back(front, back, tensor_copy_map, x)
 
     def output(self, filename):
         pass
