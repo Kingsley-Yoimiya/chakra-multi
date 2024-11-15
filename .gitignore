@@ -10,3 +10,5 @@ __pycache__/
 *et_def.pb.cc
 *et_def.pb.h
 *.log
+example/
+.DS_Store
