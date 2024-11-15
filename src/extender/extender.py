@@ -21,6 +21,7 @@ from ..third_party.utils.protolib import encodeMessage as encode_message
 from ..converter.pytorch_node import PyTorchNode, PyTorchNodeType, PyTorchTensor
 from ..converter.pytorch_converter import PyTorchConverter
 
+
 class TensorNode:
     """
     Represents a tensor node in a PyTorch execution trace, initialized based on each tensor generation.
@@ -28,7 +29,7 @@ class TensorNode:
 
     id (int):               Identifier of the node.
     extra_id(int):          The Identifier of the node[id]'s copy. (0 means the origin node)
-    value(PyTorchTensor):   The value of the tensor node which is initialized by PyTorchTensor 
+    value(PyTorchTensor):   The value of the tensor node which is initialized by PyTorchTensor
                             with tensor_data (List[int]): Data of the tensor including tensor_id, storage_id, offset, number of elements, and
                             size of each element in bytes.
     shape(List[int]):       The shape of the tensor.
@@ -36,6 +37,7 @@ class TensorNode:
     son(List[int]):         The list of future chakra node will use this node as input to operation.
     parent(int):            The chakra node that generate this node.
     """
+
     def __init__(self, id, extra_id, value, shape, type):
         self.id = id
         self.extra_id = extra_id
@@ -44,18 +46,19 @@ class TensorNode:
         self.type = type
         self.son = []
         self.parent = -1
-    
+
     def add_son(self, x):
         """
         Add a son x, which means this node will be use by x as input in the future.
         """
         self.son.append(x)
-    
+
     def set_parent(self, x):
         """
         Set parent, which represents the chakra node generate this node.
         """
         self.parent = x
+
 
 class TraceMap:
     def __init__(
@@ -66,10 +69,11 @@ class TraceMap:
         self.roots = self.parse_root()
         self.relabel_tensor()
         self.rebuild_map()
+        self.tensor_node = {}
 
     def relabel_tensor(self):
         self.tensor_count = 0
-        self.tensor_trans = defaultdict(int)
+        self.tensor_trans = defaultdict(lambda: -1)
         self.node_inputs = defaultdict(list)
         self.node_outputs = defaultdict(list)
         for id, node in self.node_map.items():
@@ -78,24 +82,30 @@ class TraceMap:
             node.extra_node = []
             if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
                 continue
-            for input_value, input_type in zip(
-                node.inputs["values"], node.inputs["shapes"]
+            for input_value, input_shape, input_type in zip(
+                node.inputs["values"], node.inputs["shapes"], node.input["types"]
             ):
                 if "Tensor" in input_type:
                     tensor = PyTorchTensor(input_value)
                     tensor = (tensor.tensor_id, tensor.storage_id)
-                    if self.tensor_trans[tensor] == 0:
-                        self.tensor_count += 1
+                    if self.tensor_trans[tensor] == -1:
                         self.tensor_trans[tensor] = self.tensor_count
+                        self.tensor_node[self.tensor_count] = TensorNode(
+                            self.tensor_count, 0, input_value, input_shape, input_type
+                        )
+                        self.tensor_count += 1
                     inputs.append(self.tensor_trans[tensor])
-            for output_value, output_type in zip(
-                node.outpus["values"], node.outputs["shapes"]
+            for output_value, output_shape, output_type in zip(
+                node.outpus["values"], node.outputs["shapes"], node.output["types"]
             ):
                 if "Tensor" in output_type:
                     tensor = PyTorchTensor(output_value)
                     tensor = (tensor.tensor_id, tensor.storage_id)
-                    self.tensor_count += 1
                     self.tensor_trans[tensor] = self.tensor_count
+                    self.tensor_node[self.tensor_count] = TensorNode(
+                        self.tensor_count, 0, output_value, output_shape, output_type
+                    )
+                    self.tensor_count += 1
                     outputs.append(self.tensor_trans[tensor])
             self.node_inputs[id] = inputs
             self.node_outputs[id] = outputs
