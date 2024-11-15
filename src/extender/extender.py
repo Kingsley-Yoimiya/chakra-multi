@@ -40,6 +40,9 @@ class TraceMap:
         for id, node in self.node_map.items():
             inputs = []
             outputs = []
+            node.extra_node = []
+            if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
+                continue
             for input_value, input_type in zip(
                 node.inputs["values"], node.inputs["shapes"]
             ):
