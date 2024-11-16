@@ -3,6 +3,7 @@ import logging
 from typing import IO, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 import queue
+import copy
 
 from ...schema.protobuf.et_def_pb2 import (
     ALL_GATHER,
@@ -119,36 +120,63 @@ class TraceMap:
                 continue
             self.node_inputs[id].sort()
             self.node_outputs[id].sort()
+            if "alltoall" in node.name:
+                continue
+            # we should ignore the node alltoall which will be process later.
             for x in self.node_inputs[id]:
                 self.tensor_node[x].add_son(id)
             for x in self.node_outputs[id]:
                 self.tensor_node[x].set_parent(id)
 
-    def extend_front(self, front, back, tensor_copy_map, x):
-        pass
+    def new_copytensor(self, time, copy_a, copy_b):
+        if self.tensor_copy_map[(copy_a, copy_b)]:
+            return self.tensor_copy_map[(copy_a, copy_b)]
+        self.tensor_copy_map[(copy_a, copy_b)] = self.tensor_count
+        self.extend_list.push((time, 2, self.tensor_count, copy_a, copy_b))
+        self.tensor_count += 1
+        return self.tensor_count - 1
 
-    def extend_back(self, front, back, tensor_copy_map, x):
+    def extend_front(self, x):
+        if x[1] == 0:  # all to all extend
+            mid = self.node_outputs[x[2]].size()
+            new_input1 = self.new_copytensor(
+                x[0], self.node_inputs[x[2]][0], self.node_inputs[x[2]][1]
+            )
+            new_input2 = self.new_copytensor(
+                x[0], self.node_inputs[x[2]][mid], self.node_inputs[x[2]][mid + 1]
+            )
+            new_output = self.new_copytensor(
+                x[0], self.node_outputs[x[2]][0], self.node_outputs[x[2]][1]
+            )
+            # 2 present tensor explan
+            # which means that at least 2 GPU can infer the behavior of the tenso generation.
+            self.node_inputs[x[2]].insert(mid, new_input1)
+            self.node_inputs[x[2]].append(new_input2)
+            self.node_outputs[x[2]].append(new_output)
+            # output will be different from input
+        elif x[1] == 1:  # operation extend
+            pass
+        else:  # tensor extend
+            pass
+
+    def extend_back(self, x):
         pass
 
     def add_GPU_samegroup(self):
-        front = queue.PriorityQueue()
-        back = queue.PriorityQueue()
-        tensor_copy_map = defaultdict(int)
+        self.extend_list = queue.PriorityQueue()
+        self.back = queue.PriorityQueue()
+        self.tensor_copy_map = defaultdict(int)
         for id, node in self.node_map.item():
             if node.ignore:
                 continue
             if "alltoall" in node.name:
-                front.push((id, 0))  # 0 present operation
-                back.push((id, 0))
-        while not front.empty() and not back.empty():
-            if not front.empty():
-                x = front.top()
-                front.pop()
-                self.extend_front(front, back, tensor_copy_map, x)
-            else:
-                x = back.top()
-                back.pop()
-                self.extend_back(front, back, tensor_copy_map, x)
+                self.extend_list.push(
+                    (id, 0, id)
+                )  # 0 present alltoall extend operation
+        while not self.extend_list.empty():
+            x = self.extend_list.top()
+            self.extend_list.pop()
+            self.extend_list.push(x)
 
     def output(self, filename):
         pass
