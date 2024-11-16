@@ -147,7 +147,7 @@ class TraceMap:
         self.oper_tot += 1
         return self.oepr_tot - 1
 
-    def extend_front(self, x):
+    def extend(self, x):
         if x[1] == 0:  # all to all extend
             mid = self.node_outputs[x[2]].size()
             new_input1 = self.new_copytensor(
@@ -166,7 +166,16 @@ class TraceMap:
             self.node_outputs[x[2]].append(new_output)
             # output will be different from input
         elif x[1] == 1:  # operation extend
-            pass
+            time, _, name, copy_a, copy_b = x
+            self.node_map[name] = copy.deepcopy(copy_a, copy_b)
+            self.node_inputs[name] = [
+                self.new_copytensor(time, a, b)
+                for (a, b) in zip(self.node_inputs[copy_a], self.node_inputs[copy_b])
+            ]
+            self.node_outputs[name] = [
+                self.new_copytensor(time, a, b)
+                for (a, b) in zip(self.node_outputs[copy_a], self.node_outputs[copy_b])
+            ]
         else:  # tensor extend
             # copy all info
             _, _, name, copy_a, copy_b = x
@@ -185,9 +194,6 @@ class TraceMap:
                 )
             ]
 
-    def extend_back(self, x):
-        pass
-
     def add_GPU_samegroup(self):
         self.extend_list = queue.PriorityQueue()
         self.back = queue.PriorityQueue()
@@ -203,7 +209,11 @@ class TraceMap:
         while not self.extend_list.empty():
             x = self.extend_list.top()
             self.extend_list.pop()
-            self.extend_list.push(x)
+            self.extend(x)
+        self.add_post_process()
+
+    def add_post_process(self):
+        pass
 
     def output(self, filename):
         pass
