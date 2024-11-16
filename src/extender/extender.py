@@ -68,6 +68,8 @@ class TraceMap:
     ) -> None:
         self.metadata = json_metadata
         self.node_map = json_node_map
+        self.oper_tot = json_node_map.keys().max() + 1
+        self.id_count = defaultdict(int)
         self.roots = self.parse_root()
         self.relabel_tensor()
         self.rebuild_map()
@@ -136,6 +138,15 @@ class TraceMap:
         self.tensor_count += 1
         return self.tensor_count - 1
 
+    def new_copyoperation(self, copy_a, copy_b):
+        if self.operation_copy_map[(copy_a, copy_b)]:
+            return self.operation_copy_map[(copy_a, copy_b)]
+        self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
+        time = max(self.node_map[copy_a].id, self.node_map[copy_b].id)
+        self.extend_list.push((time, 1, self.oper_tot, copy_a, copy_b))
+        self.oper_tot += 1
+        return self.oepr_tot - 1
+
     def extend_front(self, x):
         if x[1] == 0:  # all to all extend
             mid = self.node_outputs[x[2]].size()
@@ -157,7 +168,22 @@ class TraceMap:
         elif x[1] == 1:  # operation extend
             pass
         else:  # tensor extend
-            pass
+            # copy all info
+            _, _, name, copy_a, copy_b = x
+            op_a, op_b = (
+                self.tensor_node[copy_a].parent,
+                self.tensor_node[copy_b].parent,
+            )
+            self.tensor_node[name] = copy.deepcopy(copy_a)
+            # copy generation process
+            self.tensor_node[name].parent = self.new_copyoperation(op_a, op_b)
+            # generate son process
+            self.tensor_node[name].son = [
+                self.new_copyoperation(a, b)
+                for (a, b) in zip(
+                    self.tensor_node[copy_a].son, self.tensor_node[copy_b].son
+                )
+            ]
 
     def extend_back(self, x):
         pass
@@ -166,6 +192,7 @@ class TraceMap:
         self.extend_list = queue.PriorityQueue()
         self.back = queue.PriorityQueue()
         self.tensor_copy_map = defaultdict(int)
+        self.operation_copy_map = defaultdict(int)
         for id, node in self.node_map.item():
             if node.ignore:
                 continue
