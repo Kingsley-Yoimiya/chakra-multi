@@ -22,44 +22,8 @@ from ...schema.protobuf.et_def_pb2 import Node as ChakraNode
 from ..third_party.utils.protolib import encodeMessage as encode_message
 from ..converter.pytorch_node import PyTorchNode, PyTorchNodeType, PyTorchTensor
 from ..converter.pytorch_converter import PyTorchConverter
-
-
-class TensorNode:
-    """
-    Represents a tensor node in a PyTorch execution trace, initialized based on each tensor generation.
-    Attributes:
-
-    id (int):               Identifier of the node.
-    extra_id(int):          The Identifier of the node[id]'s copy. (0 means the origin node)
-    value(PyTorchTensor):   The value of the tensor node which is initialized by PyTorchTensor
-                            with tensor_data (List[int]): Data of the tensor including tensor_id, storage_id, offset, number of elements, and
-                            size of each element in bytes.
-    shape(List[int]):       The shape of the tensor.
-    type(str):              The type of the tensor in chakra node.
-    son(List[int]):         The list of future chakra node will use this node as input to operation.
-    parent(int):            The chakra node that generate this node.
-    """
-
-    def __init__(self, id, extra_id, value, shape, type):
-        self.id = id
-        self.extra_id = extra_id
-        self.value = PyTorchTensor(value)
-        self.shape = shape
-        self.type = type
-        self.son = []
-        self.parent = -1
-
-    def add_son(self, x):
-        """
-        Add a son x, which means this node will be use by x as input in the future.
-        """
-        self.son.append(x)
-
-    def set_parent(self, x):
-        """
-        Set parent, which represents the chakra node generate this node.
-        """
-        self.parent = x
+from tensor_node import TensorNode
+from operation_node import OperationNode
 
 
 class TraceMap:
@@ -67,10 +31,13 @@ class TraceMap:
         self, json_metadata: Dict, json_node_map: Dict[int, PyTorchNode]
     ) -> None:
         self.metadata = json_metadata
-        self.node_map = json_node_map
         self.oper_tot = json_node_map.keys().max() + 1
         self.id_count = defaultdict(int)
         self.roots = self.parse_root()
+        self.operation_node = {
+            node_id: OperationNode(old_node)
+            for node_id, old_node in json_node_map.items()
+        }
         self.relabel_tensor()
         self.rebuild_map()
         self.tensor_node: Dict[int, TensorNode] = {}
@@ -78,13 +45,10 @@ class TraceMap:
     def relabel_tensor(self):
         self.tensor_count = 0
         self.tensor_trans = defaultdict(lambda: -1)
-        self.node_inputs = defaultdict(list)
-        self.node_outputs = defaultdict(list)
-        for id, node in self.node_map.items():
-            inputs = []
-            outputs = []
-            node.extra_node = []
-            if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
+        for id, node in self.operation_node.items():
+            if not PyTorchConverter().is_root_node(
+                self.operation_node[node.parent].name
+            ):
                 node.ignore = True
                 continue
             for input_value, input_shape, input_type in zip(
@@ -99,7 +63,7 @@ class TraceMap:
                             self.tensor_count, 0, input_value, input_shape, input_type
                         )
                         self.tensor_count += 1
-                    inputs.append(self.tensor_trans[tensor])
+                    node.input_ids.append(self.tensor_trans[tensor])
             for output_value, output_shape, output_type in zip(
                 node.outputs["values"], node.outputs["shapes"], node.outputs["types"]
             ):
@@ -111,23 +75,21 @@ class TraceMap:
                         self.tensor_count, 0, output_value, output_shape, output_type
                     )
                     self.tensor_count += 1
-                    outputs.append(self.tensor_trans[tensor])
-            self.node_inputs[id] = inputs
-            self.node_outputs[id] = outputs
+                    node.output_ids.append(self.tensor_trans[tensor])
 
     def rebuild_map(self):
-        for id, node in self.node_map.items():
-            if self.ignore:
-                self.node_map[self.node_map[node.parent].name].extra_node.append(id)
+        for _, node in self.operation_node.items():
+            if node.ignore:
+                self.operation_node[
+                    self.operation_node[node.parent].name
+                ].extra_node.append(id)
                 continue
-            self.node_inputs[id].sort()
-            self.node_outputs[id].sort()
             if "alltoall" in node.name:
                 continue
             # we should ignore the node alltoall which will be process later.
-            for x in self.node_inputs[id]:
+            for x in node.input_ids:
                 self.tensor_node[x].add_son(id)
-            for x in self.node_outputs[id]:
+            for x in node.output_ids:
                 self.tensor_node[x].set_parent(id)
 
     def new_copytensor(self, time, copy_a, copy_b):
@@ -142,39 +104,45 @@ class TraceMap:
         if self.operation_copy_map[(copy_a, copy_b)]:
             return self.operation_copy_map[(copy_a, copy_b)]
         self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
-        time = max(self.node_map[copy_a].id, self.node_map[copy_b].id)
+        time = max(self.operation_node[copy_a].id, self.operation_node[copy_b].id)
         self.extend_list.put((time, 1, self.oper_tot, copy_a, copy_b))
         self.oper_tot += 1
         return self.oper_tot - 1
 
     def extend(self, x):
         if x[1] == 0:  # all to all extend
-            mid = self.node_outputs[x[2]].size()
-            new_input1 = self.new_copytensor(
-                x[0], self.node_inputs[x[2]][0], self.node_inputs[x[2]][1]
-            )
+            node = self.operation_node[x[2]]
+            mid = len(node.output_ids)
+            new_input1 = self.new_copytensor(x[0], node.input_ids[0], node.input_ids[1])
             new_input2 = self.new_copytensor(
-                x[0], self.node_inputs[x[2]][mid], self.node_inputs[x[2]][mid + 1]
+                x[0], node.input_ids[mid], node.output_ids[mid + 1]
             )
             new_output = self.new_copytensor(
-                x[0], self.node_outputs[x[2]][0], self.node_outputs[x[2]][1]
+                x[0], node.input_ids[0], node.output_ids[1]
             )
             # 2 present tensor explan
             # which means that at least 2 GPU can infer the behavior of the tensor generation.
-            self.node_inputs[x[2]].insert(mid, new_input1)
-            self.node_inputs[x[2]].append(new_input2)
-            self.node_outputs[x[2]].append(new_output)
+            node.input_ids.insert(mid, new_input1)
+            node.input_ids.append(new_input2)
+            node.output_ids.append(new_output)
             # output will be different from input
         elif x[1] == 1:  # operation extend
             time, _, name, copy_a, copy_b = x
-            self.node_map[name] = copy.deepcopy(copy_a, copy_b)
-            self.node_inputs[name] = [
+            self.operation_node[name] = copy.deepcopy(self.operation_node[copy_a])
+            node = self.operation_node[name]
+            node.input_ids = [
                 self.new_copytensor(time, a, b)
-                for (a, b) in zip(self.node_inputs[copy_a], self.node_inputs[copy_b])
+                for (a, b) in zip(
+                    self.operation_node[copy_a].input_ids,
+                    self.operation_node[copy_b].output_ids,
+                )
             ]
-            self.node_outputs[name] = [
+            node.output_ids = [
                 self.new_copytensor(time, a, b)
-                for (a, b) in zip(self.node_outputs[copy_a], self.node_outputs[copy_b])
+                for (a, b) in zip(
+                    self.operation_node[copy_a].output_ids,
+                    self.operation_node[copy_b].output_ids,
+                )
             ]
         else:  # tensor extend
             # copy all info
@@ -183,7 +151,7 @@ class TraceMap:
                 self.tensor_node[copy_a].parent,
                 self.tensor_node[copy_b].parent,
             )
-            self.tensor_node[name] = copy.deepcopy(copy_a)
+            self.tensor_node[name] = copy.deepcopy(self.tensor_node[copy_a])
             # copy generation process
             self.tensor_node[name].parent = self.new_copyoperation(op_a, op_b)
             # generate son process
@@ -199,13 +167,11 @@ class TraceMap:
         self.back = queue.PriorityQueue()
         self.tensor_copy_map = defaultdict(int)
         self.operation_copy_map = defaultdict(int)
-        for id, node in self.node_map.items():
+        for id, node in self.operation_node.items():
             if node.ignore:
                 continue
             if "alltoall" in node.name:
-                self.extend_list.put(
-                    (id, 0, id)
-                )  # 0 present alltoall extend operation
+                self.extend_list.put((id, 0, id))  # 0 present alltoall extend operation
         while not self.extend_list.empty():
             x = self.extend_list.get()
             self.extend_list.get()
