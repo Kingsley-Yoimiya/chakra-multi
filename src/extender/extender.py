@@ -85,7 +85,7 @@ class TraceMap:
             outputs = []
             node.extra_node = []
             if not PyTorchConverter().is_root_node(self.node_map[node.parent].name):
-                self.ignore = True
+                node.ignore = True
                 continue
             for input_value, input_shape, input_type in zip(
                 node.inputs["values"], node.inputs["shapes"], node.input["types"]
@@ -101,7 +101,7 @@ class TraceMap:
                         self.tensor_count += 1
                     inputs.append(self.tensor_trans[tensor])
             for output_value, output_shape, output_type in zip(
-                node.outpus["values"], node.outputs["shapes"], node.output["types"]
+                node.outputs["values"], node.outputs["shapes"], node.outputs["types"]
             ):
                 if "Tensor" in output_type:
                     tensor = PyTorchTensor(output_value)
@@ -145,7 +145,7 @@ class TraceMap:
         time = max(self.node_map[copy_a].id, self.node_map[copy_b].id)
         self.extend_list.push((time, 1, self.oper_tot, copy_a, copy_b))
         self.oper_tot += 1
-        return self.oepr_tot - 1
+        return self.oper_tot - 1
 
     def extend(self, x):
         if x[1] == 0:  # all to all extend
