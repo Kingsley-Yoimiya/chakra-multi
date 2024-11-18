@@ -134,7 +134,7 @@ class TraceMap:
         if self.tensor_copy_map[(copy_a, copy_b)]:
             return self.tensor_copy_map[(copy_a, copy_b)]
         self.tensor_copy_map[(copy_a, copy_b)] = self.tensor_count
-        self.extend_list.push((time, 2, self.tensor_count, copy_a, copy_b))
+        self.extend_list.put((time, 2, self.tensor_count, copy_a, copy_b))
         self.tensor_count += 1
         return self.tensor_count - 1
 
@@ -143,7 +143,7 @@ class TraceMap:
             return self.operation_copy_map[(copy_a, copy_b)]
         self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
         time = max(self.node_map[copy_a].id, self.node_map[copy_b].id)
-        self.extend_list.push((time, 1, self.oper_tot, copy_a, copy_b))
+        self.extend_list.put((time, 1, self.oper_tot, copy_a, copy_b))
         self.oper_tot += 1
         return self.oper_tot - 1
 
@@ -160,7 +160,7 @@ class TraceMap:
                 x[0], self.node_outputs[x[2]][0], self.node_outputs[x[2]][1]
             )
             # 2 present tensor explan
-            # which means that at least 2 GPU can infer the behavior of the tenso generation.
+            # which means that at least 2 GPU can infer the behavior of the tensor generation.
             self.node_inputs[x[2]].insert(mid, new_input1)
             self.node_inputs[x[2]].append(new_input2)
             self.node_outputs[x[2]].append(new_output)
@@ -199,16 +199,16 @@ class TraceMap:
         self.back = queue.PriorityQueue()
         self.tensor_copy_map = defaultdict(int)
         self.operation_copy_map = defaultdict(int)
-        for id, node in self.node_map.item():
+        for id, node in self.node_map.items():
             if node.ignore:
                 continue
             if "alltoall" in node.name:
-                self.extend_list.push(
+                self.extend_list.put(
                     (id, 0, id)
                 )  # 0 present alltoall extend operation
         while not self.extend_list.empty():
-            x = self.extend_list.top()
-            self.extend_list.pop()
+            x = self.extend_list.get()
+            self.extend_list.get()
             self.extend(x)
         self.add_post_process()
 
