@@ -46,6 +46,13 @@ class TraceMap:
     def __init__(
         self, json_metadata: Dict, json_node_map: Dict[int, PyTorchNode]
     ) -> None:
+        """
+        Initialize a Tracemap object using the meta data json and node_map json.
+
+        Args:
+            json_metadata (Dict):                       The info read from chakra trace.
+            Json_node_map (Dict[int, PyTorchNode]):     Dictionary mapping the id and the PyTorchNode.
+        """
         self.metadata = json_metadata
         self.oper_tot = json_node_map.keys().max() + 1
         self.id_count = defaultdict(int)
@@ -58,6 +65,9 @@ class TraceMap:
         self.tensor_node: Dict[int, TensorNode] = {}
 
     def relabel_tensor(self) -> None:
+        """
+        Before start rebuild the whole map, we should relabel tensors so that we will not confuse in the latter process.
+        """
         self.tensor_count = 0
         self.tensor_trans = defaultdict(lambda: -1)
         for _, node in self.operation_node.items():
@@ -93,6 +103,9 @@ class TraceMap:
                     node.output_ids.append(self.tensor_trans[tensor])
 
     def rebuild_map(self) -> None:
+        """
+        After relabel tensors, we can reconstruct the computation map.
+        """
         for id, node in self.operation_node.items():
             if node.ignore:
                 self.operation_node[
@@ -108,6 +121,14 @@ class TraceMap:
                 self.tensor_node[x].set_parent(id)
 
     def new_copytensor(self, time: int, copy_a: int, copy_b: int) -> int:
+        """
+        In this process, we need to generate a new tensor c, whose behavior can refer to tensor a and b.
+        We only generate id, leaving detailed information in the latter process in the priority_queue.
+
+        Args:
+            copy_a(int):        The id of the referred tensor A.
+            copy_b(int):        The id of the referred tensor B.
+        """
         if self.tensor_copy_map[(copy_a, copy_b)]:
             return self.tensor_copy_map[(copy_a, copy_b)]
         self.tensor_copy_map[(copy_a, copy_b)] = self.tensor_count
@@ -116,6 +137,14 @@ class TraceMap:
         return self.tensor_count - 1
 
     def new_copyoperation(self, copy_a: int, copy_b: int) -> int:
+        """
+        In this process, we need to generate a new oper c, whose behavior can refer to oper a and b.
+        We only generate id, leaving detailed information in the latter process in the priority_queue.
+
+        Args:
+            copy_a(int):        The id of the referred operation A.
+            copy_b(int):        The id of the referred operation B.
+        """
         if self.operation_copy_map[(copy_a, copy_b)]:
             return self.operation_copy_map[(copy_a, copy_b)]
         self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
@@ -125,6 +154,16 @@ class TraceMap:
         return self.oper_tot - 1
 
     def extend(self, x: Tuple) -> None:
+        """
+        We take a tuple x from the priority_queue, handling the copy process.
+        x have 3 forms:
+            1. (time, 0, id)            (Usually id == time) The origin of the whole process, starting from extending all2all nodes.
+            2. (time, 1, c, a, b)       (Usually id == min{time(a), time(b)}) It's a tensor extending process. We need to complete the info of c, which can be inferred by tensor a and b.
+            3. (time, 2, c, a, b)       (Usually id == min{time(a), time(b)}) It's a operation extending process. We need to complete the info of c, whichi can be inferred by operation a and b.
+
+        Args:
+            x(Tuple):                   The extending node we need to process.
+        """
         if x[1] == 0:  # all to all extend
             node = self.operation_node[x[2]]
             mid = len(node.output_ids)
@@ -178,6 +217,9 @@ class TraceMap:
             ]
 
     def add_GPU_samegroup(self):
+        """
+        The most important function that we need in this class which can perform adding a node in tensor/model parallelization, where all node do all2all/allreduce/allgather in the same time without group id.
+        """
         self.extend_list = queue.PriorityQueue()
         self.tensor_copy_map = defaultdict(int)
         self.operation_copy_map = defaultdict(int)
@@ -206,7 +248,9 @@ class PyTorchExtender:
     """
 
     def extend(self, id: List[int], input_filenames: List[str]):
-        """ """
+        """
+        Only consider tensor / model parallelism extending process.
+        """
         trace_maps = []
         for file in input_filenames:
             json_trace = PyTorchConverter().load_json_execution_traces(file)
