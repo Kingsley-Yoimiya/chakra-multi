@@ -12,6 +12,7 @@ class OperationNode(PyTorchNode):
         ignore(bool):               If the PyTorchNode have ctrl deps which is not the root, then it should be ignored and processed in the post_process.
         input_ids(List[int]):       Relabeled tensors of the PyTorchNode's inputs.
         output_ids(List[int]):      Relabeled tensors of the PyTorchNode's outputs.
+        copy_from(Tuple[int, int]): The Node copy from this tuple(a, b). If not copy, a = b = -1.
         Other Info from old_node
     """
 
@@ -28,3 +29,4 @@ class OperationNode(PyTorchNode):
         self.ignore = False
         self.input_ids = []
         self.output_ids = []
+        self.copy_from = (-1, -1)

@@ -23,6 +23,7 @@ from ..third_party.utils.protolib import encodeMessage as encode_message
 from ..converter.pytorch_node import PyTorchNode, PyTorchNodeType, PyTorchTensor
 from ..converter.pytorch_converter import PyTorchConverter
 from tensor_node import TensorNode
+from tensor_node import represent_tensor
 from operation_node import OperationNode
 
 
@@ -38,6 +39,7 @@ class TraceMap:
         tensor_node(Dict[int, TensorNode]):             All tensor node we will relabel and use in this trace.
         tensor_count(int):                              If we want a new tensor copy from a and b, the new tensor id will be tensor_count.
         tensor_trans(Dict[Tuple[int, int], int]):       The dict we will use to relabel the tensors.
+        tensor_max_info(Tuple[int, int]):               The max tensor id and store id of the trace.
         extend_list(Queue.PriorityQueue()):             The nodes we need to copy(0: all2all, 1: opeation, 2: tensor).
         tensor_copy_map(defaultdict(int)):              The map((int, int) -> (int), (copy_a, copy_b) -> (gener_tensor_node)) that we use to check if we have copy this tensor.
         operation_copy_map(defaultdict(int)):           The map((int, int) -> (int), (copy_a, copy_b) -> (gener_operation_node)) that we use to check if we have copy this operation.
@@ -80,8 +82,7 @@ class TraceMap:
                 node.inputs["values"], node.inputs["shapes"], node.input["types"]
             ):
                 if "Tensor" in input_type:
-                    tensor = PyTorchTensor(input_value)
-                    tensor = (tensor.tensor_id, tensor.storage_id)
+                    tensor = represent_tensor(input_value)
                     if self.tensor_trans[tensor] == -1:
                         self.tensor_trans[tensor] = self.tensor_count
                         self.tensor_node[self.tensor_count] = TensorNode(
@@ -93,14 +94,14 @@ class TraceMap:
                 node.outputs["values"], node.outputs["shapes"], node.outputs["types"]
             ):
                 if "Tensor" in output_type:
-                    tensor = PyTorchTensor(output_value)
-                    tensor = (tensor.tensor_id, tensor.storage_id)
+                    tensor = represent_tensor(output_value)
                     self.tensor_trans[tensor] = self.tensor_count
                     self.tensor_node[self.tensor_count] = TensorNode(
                         self.tensor_count, output_value, output_shape, output_type
                     )
                     self.tensor_count += 1
                     node.output_ids.append(self.tensor_trans[tensor])
+        self.tensor_max_info = tuple(map(max, zip(*self.tensor_trans.keys())))
 
     def rebuild_map(self) -> None:
         """
@@ -129,6 +130,10 @@ class TraceMap:
             copy_a(int):        The id of the referred tensor A.
             copy_b(int):        The id of the referred tensor B.
         """
+        if (
+            copy_a == copy_b
+        ):  # If the tensors are the same in old behave, then we don't need to generate a new one.
+            return copy_a
         if self.tensor_copy_map[(copy_a, copy_b)]:
             return self.tensor_copy_map[(copy_a, copy_b)]
         self.tensor_copy_map[(copy_a, copy_b)] = self.tensor_count
@@ -145,6 +150,10 @@ class TraceMap:
             copy_a(int):        The id of the referred operation A.
             copy_b(int):        The id of the referred operation B.
         """
+        if (
+            copy_a == copy_b
+        ):  # If the operations are the same in old behave, then we don't need to generate a new one.
+            return copy_a
         if self.operation_copy_map[(copy_a, copy_b)]:
             return self.operation_copy_map[(copy_a, copy_b)]
         self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
@@ -198,6 +207,7 @@ class TraceMap:
                     self.operation_node[copy_b].output_ids,
                 )
             ]
+            node.copy_from = (copy_a, copy_b)
         else:  # tensor extend
             # copy all info
             _, _, name, copy_a, copy_b = x
@@ -206,15 +216,17 @@ class TraceMap:
                 self.tensor_node[copy_b].parent,
             )
             self.tensor_node[name] = copy.deepcopy(self.tensor_node[copy_a])
+            node = self.tensor_node[name]
             # copy generation process
-            self.tensor_node[name].parent = self.new_copyoperation(op_a, op_b)
+            node.parent = self.new_copyoperation(op_a, op_b)
             # generate son process
-            self.tensor_node[name].son = [
+            node.son = [
                 self.new_copyoperation(a, b)
                 for (a, b) in zip(
                     self.tensor_node[copy_a].son, self.tensor_node[copy_b].son
                 )
             ]
+            node.copy_from = (copy_a, copy_b)
 
     def add_GPU_samegroup(self):
         """
@@ -232,10 +244,65 @@ class TraceMap:
             x = self.extend_list.get()
             self.extend_list.get()
             self.extend(x)
+        self.restore_tensor()
         self.add_post_process()
 
+    def restore_tensor(self):
+        """
+        Recover tensors to their trace-style format.
+        """
+        for _, node in self.tensor_node.items():
+            if node.copy_from != (-1, -1):
+                continue
+            self.tensor_max_info = (
+                self.tensor_max_info[0] + 1,
+                self.tensor_max_info[1] + 1,
+            )
+            node.value.tensor_data[0:2] = (
+                self.tensor_max_info[0],
+                self.tensor_max_info[1],
+            )
+
+        for _, node in self.operation_node.items():
+            if node.ignore:
+                continue
+            if node.copy_from != (-1, -1):
+                continue
+            cur_id = 0
+            for input_id in range(len(node.inputs["values"])):
+                if "Tensor" in node.inputs["types"][input_id]:
+                    node.inputs["values"][input_id] = self.tensor_node[
+                        node.input_ids[cur_id]
+                    ].value
+                    node.old_node.inputs["values"][input_id] = node.inputs["values"][
+                        input_id
+                    ]
+                    cur_id += 1
+            cur_id = 0
+            for output_id in range(len(node.outputs["values"])):
+                if "Tensor" in node.outputs["types"][output_id]:
+                    node.outputs["values"][output_id] = self.tensor_node[
+                        node.output_ids[cur_id]
+                    ].value
+                    node.old_node.inputs["values"][output_id] = node.outputs["values"][
+                        output_id
+                    ]
+                    cur_id += 1
+
+    def process_extra_operation(
+        self, id: int, relabel_tensor: dict[tuple[int, int], int]
+    ) -> None:
+        for x in self.operation_node[id].extra_node:
+            pass
+
     def add_post_process(self):
-        pass
+        for id, node in self.operation_node.items():
+            if node.ignore:
+                continue
+            if node.copy_from == (-1, -1):
+                continue
+            if node.extra_node:
+                pass
 
     def output(self, filename: str):
         pass

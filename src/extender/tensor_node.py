@@ -1,6 +1,11 @@
 from ..converter.pytorch_node import PyTorchTensor
 
 
+def represent_tensor(tensor_value: list[int]) -> tuple[int, int]:
+    tensor = PyTorchTensor(tensor_value)
+    return (tensor.tensor_id, tensor.storage_id)
+
+
 class TensorNode:
     """
     Represents a tensor node in a PyTorch execution trace, initialized based on each tensor generation.
@@ -10,10 +15,11 @@ class TensorNode:
         value(PyTorchTensor):   The value of the tensor node which is initialized by PyTorchTensor
                             with tensor_data (List[int]): Data of the tensor including tensor_id, storage_id, offset, number of elements, and
                             size of each element in bytes.
-        shape(List[int]):       The shape of the tensor.
-        type(str):              The type of the tensor in chakra node.
-        son(List[int]):         The list of future chakra node will use this node as input to operation.
-        parent(int):            The chakra node that generate this node.
+        shape(List[int]):           The shape of the tensor.
+        type(str):                  The type of the tensor in chakra node.
+        son(List[int]):             The list of future chakra node will use this node as input to operation.
+        parent(int):                The chakra node that generate this node.
+        copy_from(Tuple[int, int]): The Node copy from this tuple(a, b). If not copy, a = b = -1.
     """
 
     def __init__(self, id: int, value: list[int], shape: list[int], type: str):
@@ -32,6 +38,7 @@ class TensorNode:
         self.type = type
         self.son = []
         self.parent = -1
+        self.copy_from = (-1, -1)
 
     def add_son(self, x: int) -> None:
         """
