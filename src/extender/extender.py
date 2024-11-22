@@ -25,6 +25,7 @@ from ..converter.pytorch_converter import PyTorchConverter
 from tensor_node import TensorNode
 from tensor_node import represent_tensor
 from operation_node import OperationNode
+from operation_node import process_extra_operation
 
 
 class TraceMap:
@@ -101,7 +102,9 @@ class TraceMap:
                     )
                     self.tensor_count += 1
                     node.output_ids.append(self.tensor_trans[tensor])
-        self.tensor_max_info = tuple(map(max, zip(*self.tensor_trans.keys())))
+        self.tensor_max_info: tuple[int, int] = tuple(
+            map(max, zip(*self.tensor_trans.keys()))
+        )
 
     def rebuild_map(self) -> None:
         """
@@ -290,10 +293,55 @@ class TraceMap:
                     cur_id += 1
 
     def process_extra_operation(
-        self, id: int, relabel_tensor: dict[tuple[int, int], int]
-    ) -> None:
-        for x in self.operation_node[id].extra_node:
-            pass
+        self,
+        id: int,
+        id_info: tuple[int, int],
+        value_tensor: Dict[int, int] = {},
+        value_storage: Dict[int, int] = {},
+    ) -> tuple[int, tuple[int, int]]:
+        if value_tensor == {}:
+            cur: OperationNode = self.operation_node[id]
+            cur_node: PyTorchNode = cur.old_node
+            cpy_node: PyTorchNode = self.operation_node[cur.copy_from[0]].old_node
+            # The tensor node's first two arguments called tensor and storage.
+            for cur_t, cpy_t in zip(
+                cur_node.inputs["values"], cpy_node.inputs["values"]
+            ):
+                value_tensor[cpy_t[0]] = cur_t[0]
+                value_storage[cpy_t[1]] = cur_t[1]
+            for cur_t, cpy_t in zip(
+                cur_node.outputs["values"], cpy_node.outputs["values"]
+            ):
+                value_tensor[cpy_t[0]] = cur_t[0]
+                value_storage[cpy_t[1]] = cur_t[1]
+        else:
+            curid: int = self.oper_tot
+            self.operation_node[curid] = copy.deepcopy(self.operation_node[id])
+            cur: OperationNode = self.operation_node[curid]
+            cur_node: PyTorchNode = cur.old_node
+            for cur_t in cur_node.inputs["values"]:
+                if cur_t[0] not in value_tensor:
+                    value_tensor[cur_t[0]] = id_info[0] + 1
+                    id_info = id_info[0] + 1, id_info[1]
+                cur_t[0] = value_tensor[cur_t[0]]
+                if cur_t[1] not in value_storage:
+                    value_storage[cur_t[1]] = id_info[1] + 1
+                    id_info = id_info[0], id_info[1] + 1
+                cur_t[1] = value_storage[cur_t[1]]
+            for cur_t in cur_node.outputs["values"]:
+                if cur_t[0] not in value_tensor:
+                    value_tensor[cur_t[0]] = id_info[0] + 1
+                    id_info = id_info[0] + 1, id_info[1]
+                cur_t[0] = value_tensor[cur_t[0]]
+                if cur_t[1] not in value_storage:
+                    value_storage[cur_t[1]] = id_info[1] + 1
+                    id_info = id_info[0], id_info[1] + 1
+                cur_t[1] = value_tensor[cur_t[1]]
+        for i in range(len(cur.extra_node)):
+            cur.extra_node[i], id_info = self.process_extra_operation(
+                cur.extra_node[i], id_info
+            )
+        return id, id_info
 
     def add_post_process(self):
         for id, node in self.operation_node.items():
@@ -302,7 +350,10 @@ class TraceMap:
             if node.copy_from == (-1, -1):
                 continue
             if node.extra_node:
-                pass
+                _, self.tensor_max_info = self.process_extra_operation(
+                    id, self.tensor_max_info
+                )
+            node.copy_from = (-1, -1)
 
     def output(self, filename: str):
         pass
