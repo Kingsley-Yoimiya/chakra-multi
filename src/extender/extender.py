@@ -299,6 +299,22 @@ class TraceMap:
         value_tensor: Dict[int, int] = {},
         value_storage: Dict[int, int] = {},
     ) -> tuple[int, tuple[int, int]]:
+        """
+        Always, for a operation node, such as matmul, there are other specific procedure node have ctrl_deps on its.
+        We can call these nodes as extra node, which describe the lower operation of a simple operation.
+        The ctrl_deps of these nodes form a tree, which we can process by dfs. 
+        We need to copy node from the old extra, then we need to regenerate tensor's info (see tensor_node), refer to old node's tensor info(so we use 2 maps).
+
+        Args:
+            id(int):                            current processing node's id.
+            id_info(Tuple[int, int]):           Max tensor & storage id of the whole trace map.(See tensor_node)
+            value_tensor(Dict[int, int]):       The dict that map old_value's tensor to new_value's tensor.
+            value_storage(Dict[int, int]):      The dict that map old_value's storage to new_value's storage.
+
+        Returns:
+            id(int):                            Excepts the root of the extra_tree, each node will be copyed and regenerated a new id.
+            new_id_info(Tuple[int, int]):       Return the new max tensor & storage id of the whole trace map.
+        """
         if value_tensor == {}:
             cur: OperationNode = self.operation_node[id]
             cur_node: PyTorchNode = cur.old_node
@@ -317,6 +333,8 @@ class TraceMap:
         else:
             curid: int = self.oper_tot
             self.operation_node[curid] = copy.deepcopy(self.operation_node[id])
+            self.oper_tot += 1
+            id = curid
             cur: OperationNode = self.operation_node[curid]
             cur_node: PyTorchNode = cur.old_node
             for cur_t in cur_node.inputs["values"]:
