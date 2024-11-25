@@ -286,7 +286,7 @@ class TraceMap:
         """
         Always, for a operation node, such as matmul, there are other specific procedure node have ctrl_deps on its.
         We can call these nodes as extra node, which describe the lower operation of a simple operation.
-        The ctrl_deps of these nodes form a tree, which we can process by dfs. 
+        The ctrl_deps of these nodes form a tree, which we can process by dfs.
         We need to copy node from the old extra, then we need to regenerate tensor's info (see tensor_node), refer to old node's tensor info(so we use 2 maps).
 
         Args:
@@ -359,7 +359,10 @@ class TraceMap:
 
     def output(self, filename):
         result = self.metadata
-        
+        nodes = [x.__dict__ for _, x in self.operation_node.items()]
+        result["nodes"] = nodes
+        with open(filename, "w") as f:
+            json.dump(result, f)
 
 
 class PyTorchExtender:
