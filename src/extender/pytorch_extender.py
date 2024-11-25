@@ -5,7 +5,7 @@ from collections import defaultdict
 import queue
 import copy
 
-from ..converter.pytorch_node import PyTorchNode, PyTorchNodeType, PyTorchTensor
+from ..converter.pytorch_node import PyTorchNode
 from ..converter.pytorch_converter import PyTorchConverter
 from tensor_node import TensorNode
 from tensor_node import represent_tensor
