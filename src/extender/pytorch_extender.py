@@ -47,6 +47,9 @@ class TraceMap:
             node_id: OperationNode(old_node)
             for node_id, old_node in json_node_map.items()
         }
+        logging.debug(
+            f"Start process trace map with metadata: {self.metadata}, oper_tot: {self.oper_tot}"
+        )
         self.relabel_tensor()
         self.rebuild_map()
         self.tensor_node: Dict[int, TensorNode] = {}
@@ -57,11 +60,12 @@ class TraceMap:
         """
         self.tensor_count = 0
         self.tensor_trans = defaultdict(lambda: -1)
-        for _, node in self.operation_node.items():
+        for id, node in self.operation_node.items():
             if not PyTorchConverter().is_root_node(
                 self.operation_node[node.parent].name
             ):
                 node.ignore = True
+                logging.debug(f"relabel_tensor: ignore {id}")
                 continue
             for input_value, input_shape, input_type in zip(
                 node.inputs["values"], node.inputs["shapes"], node.input["types"]
@@ -74,6 +78,9 @@ class TraceMap:
                             self.tensor_count, input_value, input_shape, input_type
                         )
                         self.tensor_count += 1
+                    logging.debug(
+                        f"Map tensor {tensor} in old node {id}'s input to {self.tensor_trans[tensor]}"
+                    )
                     node.input_ids.append(self.tensor_trans[tensor])
             for output_value, output_shape, output_type in zip(
                 node.outputs["values"], node.outputs["shapes"], node.outputs["types"]
@@ -86,9 +93,13 @@ class TraceMap:
                     )
                     self.tensor_count += 1
                     node.output_ids.append(self.tensor_trans[tensor])
+                    logging.debug(
+                        f"Map tensor {tensor} in old node {id}'s output to {self.tensor_trans[tensor]}"
+                    )
         self.tensor_max_info: tuple[int, int] = tuple(
             map(max, zip(*self.tensor_trans.keys()))
         )
+        logging.debug(f"Get the tensor_max_info: {self.tensor_max_info}")
 
     def rebuild_map(self) -> None:
         """
@@ -99,13 +110,19 @@ class TraceMap:
                 self.operation_node[
                     self.operation_node[node.parent].name
                 ].extra_node.append(id)
+                logging.debug(
+                    f"Because ignored, the node id {self.operation_node[node.parent].name} have the extra_node {id}."
+                )
                 continue
             if "alltoall" in node.name:
+                logging.debug(f"The all2all node id {id} is skipped.")
                 continue
             # we should ignore the node alltoall which will be process later.
             for x in node.input_ids:
+                logging.debug(f"The node {x} have the son which id is {id}")
                 self.tensor_node[x].add_son(id)
             for x in node.output_ids:
+                logging.debug(f"The node {x} have the parent which id is {id}")
                 self.tensor_node[x].set_parent(id)
 
     def new_copytensor(self, time: int, copy_a: int, copy_b: int) -> int:
@@ -117,14 +134,23 @@ class TraceMap:
             copy_a(int):        The id of the referred tensor A.
             copy_b(int):        The id of the referred tensor B.
         """
+        logging.debug(f"Start copy tensor node {copy_a} {copy_b}.")
         if (
             copy_a == copy_b
         ):  # If the tensors are the same in old behave, then we don't need to generate a new one.
+            logging.debug(f"Tensor copy_a == copy_b : return copy_a {copy_a}.")
             return copy_a
         if self.tensor_copy_map[(copy_a, copy_b)]:
+            logging.debug(
+                f"Tensor already copied! So the result is {self.tensor_copy_map[(copy_a, copy_b)]}."
+            )
             return self.tensor_copy_map[(copy_a, copy_b)]
         self.tensor_copy_map[(copy_a, copy_b)] = self.tensor_count
+        logging.debug(f"Generate a new tensor node called {self.tensor_count}")
         self.extend_list.put((time, 2, self.tensor_count, copy_a, copy_b))
+        logging.debug(
+            f"Put {(time, 2, self.tensor_count, copy_a, copy_b)} into the extender_list, remain to extend."
+        )
         self.tensor_count += 1
         return self.tensor_count - 1
 
@@ -137,15 +163,24 @@ class TraceMap:
             copy_a(int):        The id of the referred operation A.
             copy_b(int):        The id of the referred operation B.
         """
+        logging.debug(f"Start copy operation node {copy_a} {copy_b}.")
         if (
             copy_a == copy_b
         ):  # If the operations are the same in old behave, then we don't need to generate a new one.
+            logging.debug(f"Operation copy_a == copy_b : return copy_a {copy_a}.")
             return copy_a
         if self.operation_copy_map[(copy_a, copy_b)]:
+            logging.debug(
+                f"Operation already copied! So the result is {self.operation_copy_map[(copy_a, copy_b)]}."
+            )
             return self.operation_copy_map[(copy_a, copy_b)]
         self.operation_copy_map[(copy_a, copy_b)] = self.oper_tot
+        logging.debug(f"Generate a new Opeartion node called {self.oper_tot}")
         time = max(self.operation_node[copy_a].id, self.operation_node[copy_b].id)
         self.extend_list.put((time, 1, self.oper_tot, copy_a, copy_b))
+        logging.debug(
+            f"Put {(time, 1, self.oper_tot, copy_a, copy_b)} into the extender_list, remain to extend."
+        )
         self.oper_tot += 1
         return self.oper_tot - 1
 
@@ -160,8 +195,11 @@ class TraceMap:
         Args:
             x(Tuple):                   The extending node we need to process.
         """
+        logging.debug(f"Start extend node x : {x}.")
         if x[1] == 0:  # all to all extend
             node = self.operation_node[x[2]]
+            logging.debug(f"The input_ids of x is: {node.input_ids}.")
+            logging.debug(f"The output_ids of x is: {node.output_ids}.")
             mid = len(node.output_ids)
             new_input1 = self.new_copytensor(x[0], node.input_ids[0], node.input_ids[1])
             new_input2 = self.new_copytensor(
@@ -175,6 +213,8 @@ class TraceMap:
             node.input_ids.insert(mid, new_input1)
             node.input_ids.append(new_input2)
             node.output_ids.append(new_output)
+            logging.debug(f"The result input_ids of x is: {node.input_ids}")
+            logging.debug(f"The result output_ids of x is: {node.output_ids}")
             # output will be different from input
         elif x[1] == 1:  # operation extend
             time, _, name, copy_a, copy_b = x
@@ -195,6 +235,9 @@ class TraceMap:
                 )
             ]
             node.copy_from = (copy_a, copy_b)
+            logging.debug(f"node.input_ids: {node.input_ids}")
+            logging.debug(f"node.output_ids: {node.output_ids}")
+            logging.debug(f"node.copy_from: (copy_a, copy_b)")
         else:  # tensor extend
             # copy all info
             _, _, name, copy_a, copy_b = x
@@ -202,6 +245,7 @@ class TraceMap:
                 self.tensor_node[copy_a].parent,
                 self.tensor_node[copy_b].parent,
             )
+            logging.debug(f"Tensor extend, extend source is s {op_a}, {op_b}")
             self.tensor_node[name] = copy.deepcopy(self.tensor_node[copy_a])
             node = self.tensor_node[name]
             # copy generation process
@@ -214,6 +258,9 @@ class TraceMap:
                 )
             ]
             node.copy_from = (copy_a, copy_b)
+            logging.debug(f"node.parent {node.parent}.")
+            logging.debug(f"node.son: {node.son}")
+            logging.debug(f"node.copy_from: {node.copy_from}")
 
     def add_GPU_samegroup(self):
         """
@@ -229,7 +276,6 @@ class TraceMap:
                 self.extend_list.put((id, 0, id))  # 0 present alltoall extend operation
         while not self.extend_list.empty():
             x = self.extend_list.get()
-            self.extend_list.get()
             self.extend(x)
         self.restore_tensor()
         self.add_post_process()
@@ -238,9 +284,13 @@ class TraceMap:
         """
         Recover tensors to their trace-style format.
         """
-        for _, node in self.tensor_node.items():
+        logging.debug("Start restoring tensors.")
+        for id, node in self.tensor_node.items():
             if node.copy_from != (-1, -1):
                 continue
+            logging.debug(
+                f"Start processing the node which is copied from: {node.copy_from} called the node {id}"
+            )
             self.tensor_max_info = (
                 self.tensor_max_info[0] + 1,
                 self.tensor_max_info[1] + 1,
@@ -249,12 +299,18 @@ class TraceMap:
                 self.tensor_max_info[0],
                 self.tensor_max_info[1],
             )
+            logging.debug(f"The new tensor_max_info is: {self.tensor_max_info}.")
+            logging.debug(
+                f"The node.value.tensor of tensor {id} is : {node.value.tensor_data}"
+            )
 
-        for _, node in self.operation_node.items():
+        logging.debug("Start the Operation node's info changing.")
+        for id, node in self.operation_node.items():
             if node.ignore:
                 continue
             if node.copy_from != (-1, -1):
                 continue
+            logging.debug(f"Start the old node {id}'s changing.")
             cur_id = 0
             for input_id in range(len(node.inputs["values"])):
                 if "Tensor" in node.inputs["types"][input_id]:
@@ -346,6 +402,7 @@ class TraceMap:
         return id, id_info
 
     def add_post_process(self):
+        logging.debug("Start the process for the extra node.")
         for id, node in self.operation_node.items():
             if node.ignore:
                 continue
@@ -354,6 +411,9 @@ class TraceMap:
             if node.extra_node:
                 _, self.tensor_max_info = self.process_extra_operation(
                     id, self.tensor_max_info
+                )
+                logging.debug(
+                    f"After the process of operation_node {id}, the new extra_node info is: {self.tensor_max_info}"
                 )
             node.copy_from = (-1, -1)
 

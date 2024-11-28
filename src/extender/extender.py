@@ -32,7 +32,7 @@ def extend_pytorch(args: argparse.Namespace) -> None:
     filenames = []
     id = []
     for i in range(2):
-        filenames.append(f"{args.input}{i}")
+        filenames.append(f"{args.input}{i}.json")
         id.append(i)
     extender.extend(id, filenames)
 
