@@ -7,9 +7,9 @@ import copy
 
 from ..converter.pytorch_node import PyTorchNode
 from ..converter.pytorch_converter import PyTorchConverter
-from tensor_node import TensorNode
-from tensor_node import represent_tensor
-from operation_node import OperationNode
+from .tensor_node import TensorNode
+from .tensor_node import represent_tensor
+from .operation_node import OperationNode
 
 
 class TraceMap:

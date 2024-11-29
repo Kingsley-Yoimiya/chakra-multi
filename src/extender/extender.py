@@ -68,6 +68,8 @@ def main() -> None:
         help="Input Chakara host + device traces in the JSON format. If we call the input as `name`, so the traces should be $name$i.json, which $i = 0, 1, 2 etc. ",
     )
 
+    pytorch_extend_parser.set_defaults(func=extend_pytorch)
+
     args = parser.parse_args()
 
     if "func" in args:
@@ -78,7 +80,6 @@ def main() -> None:
         )
     else:
         parser.print_help()
-    pytorch_extend_parser.set_defaults(func=extend_pytorch)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ chakra_jsonizer = "chakra.src.jsonizer.jsonizer:main"
 chakra_timeline_visualizer = "chakra.src.timeline_visualizer.timeline_visualizer:main"
 chakra_trace_link = "chakra.src.trace_link.trace_link:main"
 chakra_visualizer = "chakra.src.visualizer.visualizer:main"
-chakra_extender = "chakra.src.extender:main"
+chakra_extender = "chakra.src.extender.extender:main"
 
 [tool.ruff]
 target-version = "py39"
