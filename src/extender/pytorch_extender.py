@@ -41,7 +41,7 @@ class TraceMap:
             Json_node_map (Dict[int, PyTorchNode]):     Dictionary mapping the id and the PyTorchNode.
         """
         self.metadata = json_metadata
-        self.oper_tot = json_node_map.keys().max() + 1
+        self.oper_tot = max(json_node_map.keys()) + 1
         self.id_count = defaultdict(int)
         self.operation_node = {
             node_id: OperationNode(old_node)
@@ -50,9 +50,9 @@ class TraceMap:
         logging.debug(
             f"Start process trace map with metadata: {self.metadata}, oper_tot: {self.oper_tot}"
         )
+        self.tensor_node: Dict[int, TensorNode] = {}
         self.relabel_tensor()
         self.rebuild_map()
-        self.tensor_node: Dict[int, TensorNode] = {}
 
     def relabel_tensor(self) -> None:
         """
@@ -67,11 +67,15 @@ class TraceMap:
                 node.ignore = True
                 logging.debug(f"relabel_tensor: ignore {id}")
                 continue
+            logging.debug(
+                f"Processing the node {id} with {node.inputs['values']}, {node.inputs['shapes']}, {node.inputs['types']}"
+            )
             for input_value, input_shape, input_type in zip(
-                node.inputs["values"], node.inputs["shapes"], node.input["types"]
+                node.inputs["values"], node.inputs["shapes"], node.inputs["types"]
             ):
                 if "Tensor" in input_type:
                     tensor = represent_tensor(input_value)
+                    logging.debug(f"Current Tensor: from {input_value} to {tensor}")
                     if self.tensor_trans[tensor] == -1:
                         self.tensor_trans[tensor] = self.tensor_count
                         self.tensor_node[self.tensor_count] = TensorNode(
