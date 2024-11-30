@@ -61,8 +61,12 @@ class TraceMap:
         self.tensor_count = 0
         self.tensor_trans = defaultdict(lambda: -1)
         for id, node in self.operation_node.items():
-            if not PyTorchConverter().is_root_node(
-                self.operation_node[node.parent].name
+            if (
+                id > 0
+                and not PyTorchConverter().is_root_node(node.name)
+                and not PyTorchConverter().is_root_node(
+                    self.operation_node[node.parent].name
+                )
             ):
                 node.ignore = True
                 logging.debug(f"relabel_tensor: ignore {id}")
@@ -74,32 +78,72 @@ class TraceMap:
                 node.inputs["values"], node.inputs["shapes"], node.inputs["types"]
             ):
                 if "Tensor" in input_type:
-                    tensor = represent_tensor(input_value)
-                    logging.debug(f"Current Tensor: from {input_value} to {tensor}")
-                    if self.tensor_trans[tensor] == -1:
-                        self.tensor_trans[tensor] = self.tensor_count
-                        self.tensor_node[self.tensor_count] = TensorNode(
-                            self.tensor_count, input_value, input_shape, input_type
+                    if input_type.startswith("GenericList[Tensor"):
+                        tensor_trans_list = []
+                        for inner_value in input_value:
+                            tensor = represent_tensor(inner_value)
+                            logging.debug(
+                                f"Current Tensor: from {inner_value} to {tensor}"
+                            )
+                            if self.tensor_trans[tensor] == -1:
+                                self.tensor_trans[tensor] = self.tensor_count
+                                self.tensor_node[self.tensor_count] = TensorNode(
+                                    self.tensor_count,
+                                    inner_value,
+                                    input_shape,
+                                    input_type,
+                                )  # This is bugy, but we can temporarily ignore this.
+                                self.tensor_count += 1
+                            logging.debug(
+                                f"Map tensor {tensor} in old node {id}'s input to {self.tensor_trans[tensor]}"
+                            )
+                            tensor_trans_list.append(self.tensor_trans[tensor])
+                        node.input_ids.append(tensor_trans_list)
+                    else:
+                        tensor = represent_tensor(input_value)
+                        logging.debug(f"Current Tensor: from {input_value} to {tensor}")
+                        if self.tensor_trans[tensor] == -1:
+                            self.tensor_trans[tensor] = self.tensor_count
+                            self.tensor_node[self.tensor_count] = TensorNode(
+                                self.tensor_count, input_value, input_shape, input_type
+                            )
+                            self.tensor_count += 1
+                        node.input_ids.append(self.tensor_trans[tensor])
+                        logging.debug(
+                            f"Map tensor {tensor} in old node {id}'s input to {self.tensor_trans[tensor]}"
                         )
-                        self.tensor_count += 1
-                    logging.debug(
-                        f"Map tensor {tensor} in old node {id}'s input to {self.tensor_trans[tensor]}"
-                    )
-                    node.input_ids.append(self.tensor_trans[tensor])
             for output_value, output_shape, output_type in zip(
                 node.outputs["values"], node.outputs["shapes"], node.outputs["types"]
             ):
                 if "Tensor" in output_type:
-                    tensor = represent_tensor(output_value)
-                    self.tensor_trans[tensor] = self.tensor_count
-                    self.tensor_node[self.tensor_count] = TensorNode(
-                        self.tensor_count, output_value, output_shape, output_type
-                    )
-                    self.tensor_count += 1
-                    node.output_ids.append(self.tensor_trans[tensor])
-                    logging.debug(
-                        f"Map tensor {tensor} in old node {id}'s output to {self.tensor_trans[tensor]}"
-                    )
+                    if output_type.startswith("GenericList[Tensor"):
+                        tensor_trans_list = []
+                        for inner_value in output_value:
+                            tensor = represent_tensor(inner_value)
+                            self.tensor_trans[tensor] = self.tensor_count
+                            self.tensor_node[self.tensor_count] = TensorNode(
+                                self.tensor_count,
+                                inner_value,
+                                output_shape,
+                                output_type,
+                            )  # This is bugy, but we can temporarily ignore this.
+                            self.tensor_count += 1
+                            tensor_trans_list.append(self.tensor_trans[tensor])
+                            logging.debug(
+                                f"Map tensor {tensor} in old node {id}'s output to {self.tensor_trans[tensor]}"
+                            )
+                        node.output_ids.append(tensor_trans_list)
+                    else:
+                        tensor = represent_tensor(output_value)
+                        self.tensor_trans[tensor] = self.tensor_count
+                        self.tensor_node[self.tensor_count] = TensorNode(
+                            self.tensor_count, output_value, output_shape, output_type
+                        )
+                        self.tensor_count += 1
+                        node.output_ids.append(self.tensor_trans[tensor])
+                        logging.debug(
+                            f"Map tensor {tensor} in old node {id}'s output to {self.tensor_trans[tensor]}"
+                        )
         self.tensor_max_info: tuple[int, int] = tuple(
             map(max, zip(*self.tensor_trans.keys()))
         )
@@ -112,10 +156,10 @@ class TraceMap:
         for id, node in self.operation_node.items():
             if node.ignore:
                 self.operation_node[
-                    self.operation_node[node.parent].name
+                    self.operation_node[node.parent].id
                 ].extra_node.append(id)
                 logging.debug(
-                    f"Because ignored, the node id {self.operation_node[node.parent].name} have the extra_node {id}."
+                    f"Because ignored, the node id {self.operation_node[node.parent].id} have the extra_node {id}."
                 )
                 continue
             if "alltoall" in node.name:
@@ -124,10 +168,20 @@ class TraceMap:
             # we should ignore the node alltoall which will be process later.
             for x in node.input_ids:
                 logging.debug(f"The node {x} have the son which id is {id}")
-                self.tensor_node[x].add_son(id)
+                if isinstance(x, list):
+                    for y in x:
+                        self.tensor_node[y].add_son(id)
+                        logging.debug(f"The node {y} have the son which id is {id}")
+                else:
+                    self.tensor_node[x].add_son(id)
             for x in node.output_ids:
                 logging.debug(f"The node {x} have the parent which id is {id}")
-                self.tensor_node[x].set_parent(id)
+                if isinstance(x, list):
+                    for y in x:
+                        self.tensor_node[y].set_parent(id)
+                        logging.debug(f"The node {y} have the parent which id is {id}")
+                else:
+                    self.tensor_node[x].set_parent(id)
 
     def new_copytensor(self, time: int, copy_a: int, copy_b: int) -> int:
         """
