@@ -223,9 +223,11 @@ class TraceMap:
         """
         logging.debug(f"Start copy operation node {copy_a} {copy_b}.")
         if (
-            copy_a == copy_b
+            copy_a == copy_b or copy_a == -1 or copy_b == -1
         ):  # If the operations are the same in old behave, then we don't need to generate a new one.
-            logging.debug(f"Operation copy_a == copy_b : return copy_a {copy_a}.")
+            logging.debug(
+                f"Operation copy_a == copy_b or have -1: return copy_a {copy_a}."
+            )
             return copy_a
         if self.operation_copy_map[(copy_a, copy_b)]:
             logging.debug(
@@ -259,32 +261,47 @@ class TraceMap:
             logging.debug(f"The input_ids of x is: {node.input_ids}.")
             logging.debug(f"The output_ids of x is: {node.output_ids}.")
             mid = len(node.output_ids)
-            new_input1 = self.new_copytensor(x[0], node.input_ids[0], node.input_ids[1])
+            new_input1 = self.new_copytensor(
+                x[0], node.input_ids[0][0], node.input_ids[0][1]
+            )
             new_input2 = self.new_copytensor(
-                x[0], node.input_ids[mid], node.output_ids[mid + 1]
+                x[0], node.input_ids[1][0], node.input_ids[1][1]
             )
             new_output = self.new_copytensor(
-                x[0], node.input_ids[0], node.output_ids[1]
+                x[0], node.output_ids[0][0], node.output_ids[0][1]
             )
             # 2 present tensor explan
             # which means that at least 2 GPU can infer the behavior of the tensor generation.
-            node.input_ids.insert(mid, new_input1)
-            node.input_ids.append(new_input2)
-            node.output_ids.append(new_output)
+            node.input_ids[0].append(new_input1)
+            node.input_ids[1].append(new_input2)
+            node.output_ids[0].append(new_output)
             logging.debug(f"The result input_ids of x is: {node.input_ids}")
             logging.debug(f"The result output_ids of x is: {node.output_ids}")
             # output will be different from input
         elif x[1] == 1:  # operation extend
             time, _, name, copy_a, copy_b = x
+            logging.debug(f"Start operation node copy: {name} <- {copy_a}, {copy_b}")
             self.operation_node[name] = copy.deepcopy(self.operation_node[copy_a])
             node = self.operation_node[name]
+            logging.debug(
+                f"Op {copy_a}'s input_ids: {self.operation_node[copy_a].input_ids}"
+            )
+            logging.debug(
+                f"Op {copy_b}'s input_ids: {self.operation_node[copy_b].input_ids}"
+            )
             node.input_ids = [
                 self.new_copytensor(time, a, b)
                 for (a, b) in zip(
                     self.operation_node[copy_a].input_ids,
-                    self.operation_node[copy_b].output_ids,
+                    self.operation_node[copy_b].input_ids,
                 )
             ]
+            logging.debug(
+                f"Op {copy_a}'s output_ids: {self.operation_node[copy_a].output_ids}"
+            )
+            logging.debug(
+                f"Op {copy_b}'s output_ids: {self.operation_node[copy_b].output_ids}"
+            )
             node.output_ids = [
                 self.new_copytensor(time, a, b)
                 for (a, b) in zip(
@@ -303,12 +320,14 @@ class TraceMap:
                 self.tensor_node[copy_a].parent,
                 self.tensor_node[copy_b].parent,
             )
-            logging.debug(f"Tensor extend, extend source is s {op_a}, {op_b}")
+            logging.debug(f"Tensor extend, extend source is {op_a}, {op_b}")
             self.tensor_node[name] = copy.deepcopy(self.tensor_node[copy_a])
             node = self.tensor_node[name]
             # copy generation process
             node.parent = self.new_copyoperation(op_a, op_b)
             # generate son process
+            logging.debug(f"The node copy_a's son is: {self.tensor_node[copy_a].son}")
+            logging.debug(f"The node copy_b's son is: {self.tensor_node[copy_b].son}")
             node.son = [
                 self.new_copyoperation(a, b)
                 for (a, b) in zip(
