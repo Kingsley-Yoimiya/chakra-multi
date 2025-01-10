@@ -79,7 +79,7 @@ class TraceMap:
             ):
                 if "Tensor" in input_type:
                     if input_type.startswith("GenericList[Tensor"):
-                        tensor_trans_list = []
+                        # tensor_trans_list = []
                         for inner_value in input_value:
                             tensor = represent_tensor(inner_value)
                             logging.debug(
@@ -97,8 +97,8 @@ class TraceMap:
                             logging.debug(
                                 f"Map tensor {tensor} in old node {id}'s input to {self.tensor_trans[tensor]}"
                             )
-                            tensor_trans_list.append(self.tensor_trans[tensor])
-                        node.input_ids.append(tensor_trans_list)
+                            node.input_ids.append(self.tensor_trans[tensor])
+                        # node.input_ids.append(tensor_trans_list)
                     else:
                         tensor = represent_tensor(input_value)
                         logging.debug(f"Current Tensor: from {input_value} to {tensor}")
@@ -117,7 +117,7 @@ class TraceMap:
             ):
                 if "Tensor" in output_type:
                     if output_type.startswith("GenericList[Tensor"):
-                        tensor_trans_list = []
+                        # tensor_trans_list = []
                         for inner_value in output_value:
                             tensor = represent_tensor(inner_value)
                             self.tensor_trans[tensor] = self.tensor_count
@@ -128,11 +128,11 @@ class TraceMap:
                                 output_type,
                             )  # This is bugy, but we can temporarily ignore this.
                             self.tensor_count += 1
-                            tensor_trans_list.append(self.tensor_trans[tensor])
+                            node.output_ids.append(self.tensor_trans[tensor])
                             logging.debug(
                                 f"Map tensor {tensor} in old node {id}'s output to {self.tensor_trans[tensor]}"
                             )
-                        node.output_ids.append(tensor_trans_list)
+                        # node.output_ids.append(tensor_trans_list)
                     else:
                         tensor = represent_tensor(output_value)
                         self.tensor_trans[tensor] = self.tensor_count
@@ -261,20 +261,18 @@ class TraceMap:
             logging.debug(f"The input_ids of x is: {node.input_ids}.")
             logging.debug(f"The output_ids of x is: {node.output_ids}.")
             mid = len(node.output_ids)
-            new_input1 = self.new_copytensor(
-                x[0], node.input_ids[0][0], node.input_ids[0][1]
-            )
+            new_input1 = self.new_copytensor(x[0], node.input_ids[0], node.input_ids[1])
             new_input2 = self.new_copytensor(
-                x[0], node.input_ids[1][0], node.input_ids[1][1]
+                x[0], node.input_ids[mid], node.input_ids[mid + 1]
             )
             new_output = self.new_copytensor(
-                x[0], node.output_ids[0][0], node.output_ids[0][1]
+                x[0], node.output_ids[0], node.output_ids[1]
             )
             # 2 present tensor explan
             # which means that at least 2 GPU can infer the behavior of the tensor generation.
-            node.input_ids[0].append(new_input1)
-            node.input_ids[1].append(new_input2)
-            node.output_ids[0].append(new_output)
+            node.input_ids.insert(mid, new_input1)
+            node.input_ids.append(new_input2)
+            node.output_ids.append(new_output)
             logging.debug(f"The result input_ids of x is: {node.input_ids}")
             logging.debug(f"The result output_ids of x is: {node.output_ids}")
             # output will be different from input
@@ -283,19 +281,6 @@ class TraceMap:
             logging.debug(f"Start operation node copy: {name} <- {copy_a}, {copy_b}")
             self.operation_node[name] = copy.deepcopy(self.operation_node[copy_a])
             node = self.operation_node[name]
-            logging.debug(
-                f"Op {copy_a}'s input_ids: {self.operation_node[copy_a].input_ids}"
-            )
-            logging.debug(
-                f"Op {copy_b}'s input_ids: {self.operation_node[copy_b].input_ids}"
-            )
-            node.input_ids = [
-                self.new_copytensor(time, a, b)
-                for (a, b) in zip(
-                    self.operation_node[copy_a].input_ids,
-                    self.operation_node[copy_b].input_ids,
-                )
-            ]
             logging.debug(
                 f"Op {copy_a}'s output_ids: {self.operation_node[copy_a].output_ids}"
             )
@@ -307,6 +292,50 @@ class TraceMap:
                 for (a, b) in zip(
                     self.operation_node[copy_a].output_ids,
                     self.operation_node[copy_b].output_ids,
+                )
+            ]
+            output_map_a = {
+                x: y
+                for (x, y) in zip(
+                    self.operation_node[copy_a].output_ids, node.output_ids
+                )
+            }
+            output_map_b = {
+                x: y
+                for (x, y) in zip(
+                    self.operation_node[copy_b].output_ids, node.output_ids
+                )
+            }
+            logging.debug(
+                f"Op {copy_a}'s input_ids: {self.operation_node[copy_a].input_ids}"
+            )
+            logging.debug(
+                f"Op {copy_b}'s input_ids: {self.operation_node[copy_b].input_ids}"
+            )
+            node.input_ids = []
+            for i in range(
+                min(
+                    len(self.operation_node[copy_a].input_ids),
+                    len(self.operation_node[copy_b].input_ids),
+                )
+            ):
+                a, b = (
+                    self.operation_node[copy_a].input_ids[i],
+                    self.operation_node[copy_b].input_ids[i],
+                )
+                if a in output_map_a:
+                    self.operation_copy_map[copy_a].input_ids[i] = output_map_a[a]
+                    node.input_ids.append(a)
+                elif b in output_map_b:
+                    self.operation_copy_map[copy_b].input_ids[i] = output_map_b[b]
+                    node.input_ids.append(b)
+                else:
+                    node.input_ids.append(self.new_copytensor(time, a, b))
+            node.input_ids = [
+                self.new_copytensor(time, a, b)
+                for (a, b) in zip(
+                    self.operation_node[copy_a].input_ids,
+                    self.operation_node[copy_b].input_ids,
                 )
             ]
             node.copy_from = (copy_a, copy_b)
@@ -391,23 +420,45 @@ class TraceMap:
             cur_id = 0
             for input_id in range(len(node.inputs["values"])):
                 if "Tensor" in node.inputs["types"][input_id]:
-                    node.inputs["values"][input_id] = self.tensor_node[
-                        node.input_ids[cur_id]
-                    ].value
-                    node.old_node.inputs["values"][input_id] = node.inputs["values"][
-                        input_id
-                    ]
-                    cur_id += 1
+                    if node.inputs["types"][input_id].startswith("GenericList[Tensor"):
+                        for tensor_id in range(len(node.inputs["values"][input_id])):
+                            node.inputs["values"][input_id][tensor_id] = (
+                                self.tensor_node[node.input_ids[cur_id]].value
+                            )
+                            node.old_node.inputs["values"][input_id][tensor_id] = (
+                                self.tensor_node[node.input_ids[cur_id]].value
+                            )
+                            cur_id += 1
+                    else:
+                        node.inputs["values"][input_id] = self.tensor_node[
+                            node.input_ids[cur_id]
+                        ].value
+                        node.old_node.inputs["values"][input_id] = self.tensor_node[
+                            node.input_ids[cur_id]
+                        ].value
+                        cur_id += 1
             cur_id = 0
             for output_id in range(len(node.outputs["values"])):
                 if "Tensor" in node.outputs["types"][output_id]:
-                    node.outputs["values"][output_id] = self.tensor_node[
-                        node.output_ids[cur_id]
-                    ].value
-                    node.old_node.inputs["values"][output_id] = node.outputs["values"][
-                        output_id
-                    ]
-                    cur_id += 1
+                    if node.outputs["types"][output_id].startswith(
+                        "GenericList[Tensor"
+                    ):
+                        for tensor_id in range(len(node.outputs["values"][output_id])):
+                            node.outputs["values"][output_id][tensor_id] = (
+                                self.tensor_node[node.output_ids[cur_id]].value
+                            )
+                            node.old_node.inputs["values"][output_id][tensor_id] = (
+                                self.tensor_node[node.output_ids[cur_id]].value
+                            )
+                            cur_id += 1
+                    else:
+                        node.outputs["values"][output_id] = self.tensor_node[
+                            node.output_ids[cur_id]
+                        ].value
+                        node.old_node.inputs["values"][output_id] = self.tensor_node[
+                            node.output_ids[cur_id]
+                        ].value
+                        cur_id += 1
 
     def process_extra_operation(
         self,
