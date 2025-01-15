@@ -4,6 +4,8 @@ from typing import IO, Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 import queue
 import copy
+from pathlib import Path
+
 
 from ..converter.pytorch_node import PyTorchNode
 from ..converter.pytorch_converter import PyTorchConverter
@@ -417,25 +419,34 @@ class TraceMap:
             if node.copy_from != (-1, -1):
                 continue
             logging.debug(f"Start the old node {id}'s changing.")
+            logging.debug(f"values: {node.inputs['values']}")
+            logging.debug(f"types: {node.inputs['types']}")
             cur_id = 0
             for input_id in range(len(node.inputs["values"])):
                 if "Tensor" in node.inputs["types"][input_id]:
                     if node.inputs["types"][input_id].startswith("GenericList[Tensor"):
                         for tensor_id in range(len(node.inputs["values"][input_id])):
                             node.inputs["values"][input_id][tensor_id] = (
-                                self.tensor_node[node.input_ids[cur_id]].value
+                                self.tensor_node[
+                                    node.input_ids[cur_id]
+                                ].value.tensor_data
                             )
-                            node.old_node.inputs["values"][input_id][tensor_id] = (
-                                self.tensor_node[node.input_ids[cur_id]].value
-                            )
+
+                            # node.old_node.inputs["values"][input_id][tensor_id] = (
+                            #     self.tensor_node[node.input_ids[cur_id]].value
+                            # )
                             cur_id += 1
+                            logging.debug(
+                                f"Get: {node.inputs['values'][input_id][tensor_id]}"
+                            )
                     else:
                         node.inputs["values"][input_id] = self.tensor_node[
                             node.input_ids[cur_id]
-                        ].value
-                        node.old_node.inputs["values"][input_id] = self.tensor_node[
-                            node.input_ids[cur_id]
-                        ].value
+                        ].value.tensor_data
+                        # node.old_node.inputs["values"][input_id] = self.tensor_node[
+                        #     node.input_ids[cur_id]
+                        # ].value
+                        logging.debug(f"Get: {node.inputs['values'][input_id]}")
                         cur_id += 1
             cur_id = 0
             for output_id in range(len(node.outputs["values"])):
@@ -445,20 +456,24 @@ class TraceMap:
                     ):
                         for tensor_id in range(len(node.outputs["values"][output_id])):
                             node.outputs["values"][output_id][tensor_id] = (
-                                self.tensor_node[node.output_ids[cur_id]].value
+                                self.tensor_node[
+                                    node.output_ids[cur_id]
+                                ].value.tensor_data
                             )
-                            node.old_node.inputs["values"][output_id][tensor_id] = (
-                                self.tensor_node[node.output_ids[cur_id]].value
-                            )
+                            # node.old_node.outputs["values"][output_id][tensor_id] = (
+                            #     self.tensor_node[node.output_ids[cur_id]].value
+                            # )
                             cur_id += 1
                     else:
                         node.outputs["values"][output_id] = self.tensor_node[
                             node.output_ids[cur_id]
-                        ].value
-                        node.old_node.inputs["values"][output_id] = self.tensor_node[
-                            node.output_ids[cur_id]
-                        ].value
+                        ].value.tensor_data
+                        # node.old_node.outputs["values"][output_id] = self.tensor_node[
+                        #     node.output_ids[cur_id]
+                        # ].value
                         cur_id += 1
+            logging.debug(f"values: {node.inputs['values']}")
+            logging.debug(f"types: {node.inputs['types']}")
 
     def process_extra_operation(
         self,
@@ -483,21 +498,50 @@ class TraceMap:
             id(int):                            Excepts the root of the extra_tree, each node will be copyed and regenerated a new id.
             new_id_info(Tuple[int, int]):       Return the new max tensor & storage id of the whole trace map.
         """
+        logging.debug(
+            f"ID: {id}, Id_info: {id_info}, value_tensor: {value_tensor}, value_storage: {value_storage}"
+        )
         if value_tensor == {}:
             cur: OperationNode = self.operation_node[id]
+            if cur.copy_from[0] == -1 or cur.copy_from[1] == -1:
+                return id, id_info
             cur_node: PyTorchNode = cur.old_node
+            logging.debug(f"cur_id: {id}, copy_id: {cur.copy_from}")
             cpy_node: PyTorchNode = self.operation_node[cur.copy_from[0]].old_node
+            logging.debug(f"cur_node: {cur_node}, cpy_node: {cpy_node}")
             # The tensor node's first two arguments called tensor and storage.
-            for cur_t, cpy_t in zip(
-                cur_node.inputs["values"], cpy_node.inputs["values"]
+            logging.debug(f"cur_node.inputs[values]: {cur_node.inputs['values']}")
+            logging.debug(f"cpy_node.inputs[values]: {cpy_node.inputs['values']}")
+            logging.debug(f"cur_node.inputs[types]: {cur_node.inputs['types']}")
+            for cur_t, cpy_t, tp in zip(
+                cur_node.inputs["values"],
+                cpy_node.inputs["values"],
+                cur_node.inputs["types"],
             ):
-                value_tensor[cpy_t[0]] = cur_t[0]
-                value_storage[cpy_t[1]] = cur_t[1]
-            for cur_t, cpy_t in zip(
-                cur_node.outputs["values"], cpy_node.outputs["values"]
+                if "Tensor" not in tp:
+                    continue
+                logging.debug(f"cur_t: {cur_t}, cpy_t: {cpy_t}")
+                if tp.startswith("GenericList[Tensor"):
+                    for cur_t_inner, cpy_t_inner in zip(cur_t, cpy_t):
+                        value_tensor[cpy_t_inner[0]] = cur_t_inner[0]
+                        value_storage[cpy_t_inner[1]] = cur_t_inner[1]
+                else:
+                    value_tensor[cpy_t[0]] = cur_t[0]
+                    value_storage[cpy_t[1]] = cur_t[1]
+            for cur_t, cpy_t, tp in zip(
+                cur_node.outputs["values"],
+                cpy_node.outputs["values"],
+                cur_node.outputs["values"],
             ):
-                value_tensor[cpy_t[0]] = cur_t[0]
-                value_storage[cpy_t[1]] = cur_t[1]
+                if "Tensor" not in tp:
+                    continue
+                if tp.startswith("GenericList[Tensor"):
+                    for cur_t_inner, cpy_t_inner in zip(cur_t, cpy_t):
+                        value_tensor[cpy_t_inner[0]] = cur_t_inner[0]
+                        value_storage[cpy_t_inner[1]] = cur_t_inner[1]
+                else:
+                    value_tensor[cpy_t[0]] = cur_t[0]
+                    value_storage[cpy_t[1]] = cur_t[1]
         else:
             curid: int = self.oper_tot
             self.operation_node[curid] = copy.deepcopy(self.operation_node[id])
@@ -505,24 +549,51 @@ class TraceMap:
             id = curid
             cur: OperationNode = self.operation_node[curid]
             cur_node: PyTorchNode = cur.old_node
-            for cur_t in cur_node.inputs["values"]:
-                if cur_t[0] not in value_tensor:
-                    value_tensor[cur_t[0]] = id_info[0] + 1
-                    id_info = id_info[0] + 1, id_info[1]
-                cur_t[0] = value_tensor[cur_t[0]]
-                if cur_t[1] not in value_storage:
-                    value_storage[cur_t[1]] = id_info[1] + 1
-                    id_info = id_info[0], id_info[1] + 1
-                cur_t[1] = value_storage[cur_t[1]]
-            for cur_t in cur_node.outputs["values"]:
-                if cur_t[0] not in value_tensor:
-                    value_tensor[cur_t[0]] = id_info[0] + 1
-                    id_info = id_info[0] + 1, id_info[1]
-                cur_t[0] = value_tensor[cur_t[0]]
-                if cur_t[1] not in value_storage:
-                    value_storage[cur_t[1]] = id_info[1] + 1
-                    id_info = id_info[0], id_info[1] + 1
-                cur_t[1] = value_tensor[cur_t[1]]
+            logging.debug(f"cur_node.inputs[values]: {cur_node.inputs['values']}")
+            for cur_t, tp in zip(cur_node.inputs["values"], cur_node.inputs["types"]):
+                if "Tensor" not in tp:
+                    continue
+                if tp.startswith("GenericList[Tensor"):
+                    for cur_t_inner in cur_t:
+                        if cur_t_inner[0] not in value_tensor:
+                            value_tensor[cur_t_inner[0]] = id_info[0] + 1
+                            id_info = id_info[0] + 1, id_info[1]
+                        cur_t_inner[0] = value_tensor[cur_t_inner[0]]
+                        if cur_t_inner[1] not in value_storage:
+                            value_storage[cur_t_inner[1]] = id_info[1] + 1
+                            id_info = id_info[0], id_info[1] + 1
+                        cur_t_inner[1] = value_storage[cur_t_inner[1]]
+                else:
+                    if cur_t[0] not in value_tensor:
+                        value_tensor[cur_t[0]] = id_info[0] + 1
+                        id_info = id_info[0] + 1, id_info[1]
+                    cur_t[0] = value_tensor[cur_t[0]]
+                    if cur_t[1] not in value_storage:
+                        value_storage[cur_t[1]] = id_info[1] + 1
+                        id_info = id_info[0], id_info[1] + 1
+                    cur_t[1] = value_storage[cur_t[1]]
+            for cur_t, tp in zip(cur_node.outputs["values"], cur_node.outputs["types"]):
+                if "Tensor" not in tp:
+                    continue
+                if tp.startswith("GenericList[Tensor"):
+                    for cur_t_inner in cur_t:
+                        if cur_t_inner[0] not in value_tensor:
+                            value_tensor[cur_t_inner[0]] = id_info[0] + 1
+                            id_info = id_info[0] + 1, id_info[1]
+                        cur_t_inner[0] = value_tensor[cur_t_inner[0]]
+                        if cur_t_inner[1] not in value_storage:
+                            value_storage[cur_t_inner[1]] = id_info[1] + 1
+                            id_info = id_info[0], id_info[1] + 1
+                        cur_t_inner[1] = value_storage[cur_t_inner[1]]
+                else:
+                    if cur_t[0] not in value_tensor:
+                        value_tensor[cur_t[0]] = id_info[0] + 1
+                        id_info = id_info[0] + 1, id_info[1]
+                    cur_t[0] = value_tensor[cur_t[0]]
+                    if cur_t[1] not in value_storage:
+                        value_storage[cur_t[1]] = id_info[1] + 1
+                        id_info = id_info[0], id_info[1] + 1
+                    cur_t[1] = value_storage[cur_t[1]]
         for i in range(len(cur.extra_node)):
             cur.extra_node[i], id_info = self.process_extra_operation(
                 cur.extra_node[i], id_info
@@ -531,7 +602,8 @@ class TraceMap:
 
     def add_post_process(self):
         logging.debug("Start the process for the extra node.")
-        for id, node in self.operation_node.items():
+        for id in range(self.oper_tot):
+            node = self.operation_node[id]
             if node.ignore:
                 continue
             if node.copy_from == (-1, -1):
@@ -546,6 +618,7 @@ class TraceMap:
             node.copy_from = (-1, -1)
 
     def output(self, filename):
+        logging.debug(f"Start output the result to {filename}.")
         result = self.metadata
         nodes = [x.__dict__ for _, x in self.operation_node.items()]
         result["nodes"] = nodes
@@ -578,4 +651,5 @@ class PyTorchExtender:
         for x in trace_maps:
             x.add_GPU_samegroup()
         for map, filename in zip(trace_maps, input_filenames):
-            map.output("ext_" + filename)
+            file = Path(filename)
+            map.output(file.with_name(f"ext_{Path(file).name}"))
